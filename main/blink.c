@@ -22,14 +22,6 @@ static const char *TAG = "TLS3001";
 #define RMT_TX_CHANNEL RMT_CHANNEL_0
 #define RMT_TX_GPIO 18
 
-typedef union {
-	struct __attribute__((packed)) {
-		uint8_t r, g, b;
-	};
-	uint32_t num;
-} rgbVal;
-
-
 
 #define PIXELS (10)	//Number of pixels 
 
@@ -46,11 +38,14 @@ typedef union {
 #define RMT_BLOCK_LEN	32
 #define RMT_MAX_DELAY 32767
 #define blank_187us 187
-#define SYNC_DELAY_CONST (29)	//minimum delay of 28.34uS
+#define SYNC_DELAY_CONST (28.34)	//minimum delay of 28.34uS
 #define data_one  {{{ 3, 1, 3, 0 }}}
 #define data_zero {{{ 3, 0, 3, 1 }}}
 #define data_1msblank {{{ 500, 0, 500, 0 }}}
-#define data_postsyncdelay {{{ (PIXELS*SYNC_DELAY_CONST), 0, (PIXELS*SYNC_DELAY_CONST), 0 }}}
+
+#define postsyncduration ((PIXELS*SYNC_DELAY_CONST)/2)
+
+//#define data_postsyncdelay {{{ ((PIXELS*SYNC_DELAY_CONST)/2), 0, ((PIXELS*SYNC_DELAY_CONST)/2), 0 }}}
 
 rmt_item32_t packet_resetdevice[] = {
 	data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, 
@@ -60,7 +55,7 @@ rmt_item32_t packet_resetdevice[] = {
 	data_zero
 };  //Reset device (19 bits, 15 x 0b1, 1 x 0b0, 1 x 0b1 & 2 x 0b0)
 
-rmt_item32_t packet_syncdevice[] = {
+rmt_item32_t packet_syncdata[] = {
 	data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one, data_one,
 	data_zero, data_zero, data_zero,
 	data_one,
@@ -78,9 +73,11 @@ rmt_item32_t packet_delayresetsync[] = {
 	data_1msblank
 };  //Delay (1mS) between Reset device and Synchronize device
 
+/*
 rmt_item32_t packet_delaypostsync[] = {
 	{{{ 4, 0, 4, 0 }}}
 };   
+*/
 
 rmt_item32_t packet_delay_prestart[] = {
 	{{{ 75, 0, 75, 0 }}}
@@ -95,68 +92,60 @@ typedef struct
 }pixel_data_s;
 
 pixel_data_s pixel_data_array[PIXELS];
+uint16_t size_start = NUM(packet_startdata);
+uint16_t size_sync = NUM(packet_syncdata);
 
-void int_to_RMT(rmt_item32_t *RMT_pixel_ret, pixel_data_s *intdata_pixel_RGD);
-void Fill_RMT_rx_array(rmt_item32_t *rmt_pixel_array_index, pixel_data_s *pixel_data);
+void int_to_RMT(rmt_item32_t *pixel_x_index, pixel_data_s *intdata_pixel_RGD);
+void Fill_rmt_tx_pixel_array(rmt_item32_t *rmt_pixel_array_start_index, uint16_t pixel_index, pixel_data_s *pixel_data);
+void Fill_RMT_syncdelay_array(rmt_item32_t * RMT_syncdelay_packet_pointer);
+void RMT_init(rmt_channel_t channel, gpio_num_t gpio);
 
 static void light_control(void *arg) {
+	
 	ESP_LOGI(TAG, "[APP] Init");
 	
-	// RMT Config
-	rmt_config_t config;
-	config.rmt_mode = RMT_MODE_TX;
-	config.channel = RMT_TX_CHANNEL;
-	config.gpio_num = RMT_TX_GPIO;
-	config.mem_block_num = 1;
-	config.tx_config.loop_en = 0;
-	config.tx_config.carrier_en = 0;
-	config.tx_config.idle_output_en = 1;
-	config.tx_config.idle_level = 0;
-	config.clk_div = 80;		//Gives: 1 duration = 1 us
-
-	ESP_ERROR_CHECK(rmt_config(&config));
-	ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
-
-
-	ESP_LOGI(TAG, "[APP] Init done");
+	//Init channel 0
+	RMT_init(0, RMT_TX_GPIO);	
 	
-	uint16_t size_start = NUM(packet_startdata);
-
-	rmt_item32_t *RMT_pixel_array_pointer;
-
+	//Allocate sync-delay packet memory
+	rmt_item32_t *RMT_syncdelay_packet_pointer = calloc((size_sync + 1), sizeof(rmt_item32_t));
+	
+	//Generate syncdelay RMT array
+	Fill_RMT_syncdelay_array(RMT_syncdelay_packet_pointer);
+	
+	
 	//Allocate RMT TX memory
-	rmt_item32_t *RMT_pixel_array_pointer_start = calloc((size_start + (PIXELS*RMT_RGB_DATA_ITEMS)), 4);
-	
-	RMT_pixel_array_pointer = RMT_pixel_array_pointer_start;
-	
+	rmt_item32_t *RMT_RGB_array_pointer_start = calloc((size_start + (PIXELS*RMT_RGB_DATA_ITEMS)), sizeof(rmt_item32_t));
+		
 	//First, copy a startdata package to allocated RMT tx memory
-	memcpy(RMT_pixel_array_pointer, packet_startdata, (size_start*4));
+	memcpy(RMT_RGB_array_pointer_start, packet_startdata, (size_start*sizeof(rmt_item32_t)));
+	
+	rmt_item32_t *RMT_pixel_array_pointer = RMT_RGB_array_pointer_start + size_start;		//Points to pixel 0 (after start package)
 	
 	//test colors. Fill 10 PIXELS with some RGB data
-	for(uint8_t i = 0 ; i < PIXELS ; i++)
+	for(uint8_t pixel_ind = 0 ; pixel_ind < PIXELS ; pixel_ind++)
 	{
-		pixel_data_array[i].red = 2000+i;
-		pixel_data_array[i].green = 500+i;
-		pixel_data_array[i].blue = 1000+i;
-				
-		//Increment pointer to RMT pixel array, points to location of next pixel data
-		RMT_pixel_array_pointer = RMT_pixel_array_pointer_start + size_start + (i * RMT_RGB_DATA_ITEMS);
+		pixel_data_array[pixel_ind].red = 2000 + pixel_ind;
+		pixel_data_array[pixel_ind].green = 500 + pixel_ind;
+		pixel_data_array[pixel_ind].blue = 1000 + pixel_ind;
 		
-		Fill_RMT_rx_array(RMT_pixel_array_pointer, &pixel_data_array[i]);
+		//Fill rmt tx array with given pixel index and RGB data.
+		Fill_rmt_tx_pixel_array(RMT_pixel_array_pointer, pixel_ind, &pixel_data_array[pixel_ind]);
 			
 	}
 
 	//Write reset, reset delay, sync and sync delay
 	rmt_write_items(RMT_TX_CHANNEL, packet_resetdevice, NUM(packet_resetdevice), true);
 	rmt_write_items(RMT_TX_CHANNEL, packet_delayresetsync, NUM(packet_delayresetsync), true);
-	rmt_write_items(RMT_TX_CHANNEL, packet_syncdevice, NUM(packet_syncdevice), true);
-	rmt_write_items(RMT_TX_CHANNEL, packet_delaypostsync, NUM(packet_delaypostsync), true);		//Not working correctly??
+	rmt_write_items(RMT_TX_CHANNEL, RMT_syncdelay_packet_pointer, (size_sync + 1), true);
+	
+	//rmt_write_items(RMT_TX_CHANNEL, packet_delaypostsync, NUM(packet_delaypostsync), true);		//Not working correctly??
 	
 	//rmt_write_items(RMT_TX_CHANNEL, packet_delaypoststart, NUM(packet_delaypoststart), true); 	//125us delay after last data bit
 	
 	while (1) {
 		ESP_LOGI(TAG, "[APP] Send packet");
-		rmt_write_items(RMT_TX_CHANNEL, RMT_pixel_array_pointer_start, ((RMT_RGB_DATA_ITEMS*PIXELS) + size_start), true);       	//test color, including start frame
+		rmt_write_items(RMT_TX_CHANNEL, RMT_RGB_array_pointer_start, ((RMT_RGB_DATA_ITEMS*PIXELS) + size_start), true);       	//test color, including start frame
 
 		/*Left to-do:
 			-Implement correct delay of 125uS between last data bit and new start
@@ -175,7 +164,27 @@ void app_main()
 	xTaskCreate(light_control, "light_control", 4096, NULL, 5, NULL);
 }
 
-void int_to_RMT(rmt_item32_t *RMT_pixel_ret, pixel_data_s *intdata_pixel_RGD)
+void RMT_init(rmt_channel_t channel, gpio_num_t gpio)
+{
+	// RMT Config
+	rmt_config_t config;
+	config.rmt_mode = RMT_MODE_TX;
+	config.channel = channel;
+	config.gpio_num = gpio;
+	config.mem_block_num = 1;
+	config.tx_config.loop_en = 0;
+	config.tx_config.carrier_en = 0;
+	config.tx_config.idle_output_en = 1;
+	config.tx_config.idle_level = 0;
+	config.clk_div = 80;		//Gives: 1 duration = 1 us
+
+	ESP_ERROR_CHECK(rmt_config(&config));
+	ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
+
+	ESP_LOGI(TAG, "[APP] Init done");
+}
+
+void int_to_RMT(rmt_item32_t *pixel_x_index, pixel_data_s *intdata_pixel_RGD)
 {
 	uint16_t k, i;
 	int16_t c;
@@ -227,13 +236,25 @@ void int_to_RMT(rmt_item32_t *RMT_pixel_ret, pixel_data_s *intdata_pixel_RGD)
 		
 		}
 	
-	memcpy(RMT_pixel_ret, &RMT_pixel_local, RMT_RGB_DATA_PACKAGE_LEN);
+	memcpy(pixel_x_index, &RMT_pixel_local, RMT_RGB_DATA_PACKAGE_LEN);
 	
 }
 
-void Fill_RMT_rx_array(rmt_item32_t *rmt_pixel_array_index, pixel_data_s *pixel_data)
+void Fill_rmt_tx_pixel_array(rmt_item32_t *rmt_array_pixel_0_index, uint16_t pixel_index, pixel_data_s *pixel_data)
 {
-	int_to_RMT(rmt_pixel_array_index, pixel_data);
+	rmt_item32_t *rmt_array_pixel_x_index;
+	//Increment pointer to RMT pixel array, points to location of next pixel data
+	rmt_array_pixel_x_index = rmt_array_pixel_0_index + (pixel_index * RMT_RGB_DATA_ITEMS);
 	
-	//Do some other stuff here in the future? 
+	int_to_RMT(rmt_array_pixel_x_index, pixel_data);
+
+}
+
+void Fill_RMT_syncdelay_array(rmt_item32_t * RMT_syncdelay_packet_pointer)
+{
+	memcpy(RMT_syncdelay_packet_pointer, packet_syncdata, (size_sync*sizeof(rmt_item32_t)));
+	(RMT_syncdelay_packet_pointer + size_sync)->duration0 = (uint32_t) postsyncduration;
+	(RMT_syncdelay_packet_pointer + size_sync)->level0 = 0;
+	(RMT_syncdelay_packet_pointer + size_sync)->duration1 = (uint32_t) postsyncduration;
+	(RMT_syncdelay_packet_pointer + size_sync)->level1 = 0;
 }
