@@ -1,0 +1,6 @@
+Debug/
+VisualGDBCache/
+CodeDB/
+main/Kconfig.projbuild
+esp_pico_lights.sln
+esp_pico_lights.vgdbproj
