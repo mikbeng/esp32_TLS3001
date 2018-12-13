@@ -23,7 +23,9 @@ static const char *TAG = "TLS3001";
 #define RMT_TX_GPIO 18
 
 
-#define PIXELS (10)	//Number of pixels 
+#define PIXELS (126)	//Number of pixels 
+
+//#define PIXELS (10)	//Number of pixels 
 
 #define TLS3001_COLOR_BITS (13)
 #define TLS3001_PIXEL_BITS (39)
@@ -39,11 +41,13 @@ static const char *TAG = "TLS3001";
 #define RMT_MAX_DELAY 32767
 #define blank_187us 187
 #define SYNC_DELAY_CONST (28.34)	//minimum delay of 28.34uS
+//#define SYNC_DELAY_CONST (1)	//minimum delay of 28.34uS
 #define data_one  {{{ 3, 1, 3, 0 }}}
 #define data_zero {{{ 3, 0, 3, 1 }}}
 #define data_1msblank {{{ 500, 0, 500, 0 }}}
 
 #define postsyncduration ((PIXELS*SYNC_DELAY_CONST)/2)
+#define extra_delay 86	//Due to some overhead
 
 //#define data_postsyncdelay {{{ ((PIXELS*SYNC_DELAY_CONST)/2), 0, ((PIXELS*SYNC_DELAY_CONST)/2), 0 }}}
 
@@ -125,27 +129,30 @@ static void light_control(void *arg) {
 	//test colors. Fill 10 PIXELS with some RGB data
 	for(uint8_t pixel_ind = 0 ; pixel_ind < PIXELS ; pixel_ind++)
 	{
-		pixel_data_array[pixel_ind].red = 2000 + pixel_ind;
-		pixel_data_array[pixel_ind].green = 500 + pixel_ind;
-		pixel_data_array[pixel_ind].blue = 1000 + pixel_ind;
+		pixel_data_array[pixel_ind].red = 4000;// + pixel_ind;
+		pixel_data_array[pixel_ind].green = 0;//500 + pixel_ind;
+		pixel_data_array[pixel_ind].blue = 0;//200 + pixel_ind + 100;
 		
 		//Fill rmt tx array with given pixel index and RGB data.
 		Fill_rmt_tx_pixel_array(RMT_pixel_array_pointer, pixel_ind, &pixel_data_array[pixel_ind]);
 			
 	}
-
 	//Write reset, reset delay, sync and sync delay
 	rmt_write_items(RMT_TX_CHANNEL, packet_resetdevice, NUM(packet_resetdevice), true);
 	rmt_write_items(RMT_TX_CHANNEL, packet_delayresetsync, NUM(packet_delayresetsync), true);
-	rmt_write_items(RMT_TX_CHANNEL, RMT_syncdelay_packet_pointer, (size_sync + 1), true);
-	
+	rmt_write_items(RMT_TX_CHANNEL, RMT_syncdelay_packet_pointer, (size_sync+1), true);
+	rmt_write_items(RMT_TX_CHANNEL, RMT_RGB_array_pointer_start, ((RMT_RGB_DATA_ITEMS*PIXELS) + size_start), true);         	//test color, including start frame
+
 	//rmt_write_items(RMT_TX_CHANNEL, packet_delaypostsync, NUM(packet_delaypostsync), true);		//Not working correctly??
 	
 	//rmt_write_items(RMT_TX_CHANNEL, packet_delaypoststart, NUM(packet_delaypoststart), true); 	//125us delay after last data bit
-	
+	vTaskDelay(10 / portTICK_PERIOD_MS);
 	while (1) {
-		ESP_LOGI(TAG, "[APP] Send packet");
-		rmt_write_items(RMT_TX_CHANNEL, RMT_RGB_array_pointer_start, ((RMT_RGB_DATA_ITEMS*PIXELS) + size_start), true);       	//test color, including start frame
+		
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+		rmt_write_items(RMT_TX_CHANNEL, RMT_syncdelay_packet_pointer, (size_sync + 1), true);
+		rmt_write_items(RMT_TX_CHANNEL, RMT_RGB_array_pointer_start, ((RMT_RGB_DATA_ITEMS*PIXELS) + size_start), true);          	//test color, including start frame
+		
 
 		/*Left to-do:
 			-Implement correct delay of 125uS between last data bit and new start
@@ -154,7 +161,6 @@ static void light_control(void *arg) {
 			
 		*/	
 		
-		vTaskDelay(500 / portTICK_PERIOD_MS);
 	}
 }
 
@@ -253,8 +259,8 @@ void Fill_rmt_tx_pixel_array(rmt_item32_t *rmt_array_pixel_0_index, uint16_t pix
 void Fill_RMT_syncdelay_array(rmt_item32_t * RMT_syncdelay_packet_pointer)
 {
 	memcpy(RMT_syncdelay_packet_pointer, packet_syncdata, (size_sync*sizeof(rmt_item32_t)));
-	(RMT_syncdelay_packet_pointer + size_sync)->duration0 = (uint32_t) postsyncduration;
+	(RMT_syncdelay_packet_pointer + size_sync)->duration0 = (uint32_t)(postsyncduration - (extra_delay / 2));
 	(RMT_syncdelay_packet_pointer + size_sync)->level0 = 0;
-	(RMT_syncdelay_packet_pointer + size_sync)->duration1 = (uint32_t) postsyncduration;
+	(RMT_syncdelay_packet_pointer + size_sync)->duration1 = (uint32_t)(postsyncduration - (extra_delay / 2));
 	(RMT_syncdelay_packet_pointer + size_sync)->level1 = 0;
 }
