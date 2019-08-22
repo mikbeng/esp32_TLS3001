@@ -1,5 +1,4 @@
-# Blink Example
+# LTS3001 via RMT ESP32
 
-Starts a FreeRTOS task to blink an LED
-
-See the README.md file in the upper level 'examples' directory for more information about examples.
+Experimental code. Not really working.. See latest working repository with ESP32 and SPI:
+https://github.com/mikbeng/esp32_TLS3001_spi.git
